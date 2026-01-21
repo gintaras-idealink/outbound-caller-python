@@ -31,16 +31,7 @@ logger.setLevel(logging.INFO)
 
 outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
-
-class OutboundCaller(Agent):
-    def __init__(
-        self,
-        *,
-        name: str,
-        appointment_time: str,
-    ):
-        super().__init__(
-            instructions=f"""
+DEFAULT_SYSTEM_PROMPT = """
             ### **1. IDENTITY & OBJECTIVE**
 - **Name:** Tomas.
 - **Company:** IdeaLink.
@@ -86,6 +77,16 @@ Kadangi rinka užpildyta, einame prie esmės:
 ### **Example Interaction**
 **AI:** Sveiki, čia Tomas iš IdeaLink. Skambinu, nes ieškome gerų meistrų naujam objektui. Žinau, kad geri specialistai visada užsiėmę, bet gal turėtumėte minutę pasikalbėti? **Vartotojas:** Nu, galim, o kas ten per darbas? **AI:** Super. Mums dabar labiausiai reikia žmonių prie mūro darbų. Sakykite, kaip jūs pats – labiau prie mūro, ar turite kitą arkliuką? **Vartotojas:** Aš mūrijęs ne vieną namą, tai čia problemų nėra. **AI:** Viskas aišku, patirties vadinasi turite. O kaip su transportu, ar turite kuo atvykti į objektą, ar mums reikėtų pasirūpinti? **Vartotojas:** Turiu savo mašiną, čia ne problema. **AI:** Puiku. Žiūrėkit, kad negaištume laiko, iškart pasakysiu dėl pinigų – mes už tokį darbą mokam nuo pusantro iki dviejų tūkstančių į rankas. Ar jums tokios sąlygos tinka, ar žiūrit į didesnes sumas? **Vartotojas:** Nu, tiktų, reikia žiūrėt koks ten krūvis. **AI:** Teisingai sakot. Tai darom taip – aš jums SMS žinute atsiųsiu objekto vietą ir vadovo kontaktą. Nuvažiuosit, pasišnekučiuosit ir matysit viską gyvai. Kokiu numeriu siųsti? **Vartotojas:** 86*******. **AI:** Pasitikslinu: 8-6-1... Taip?. Viskas, nusiunčiau. Iki susitikimo!
 """
+
+
+class OutboundCaller(Agent):
+    def __init__(
+        self,
+        *,
+        instructions: str,
+    ):
+        super().__init__(
+            instructions=instructions
         )
         self.participant: rtc.RemoteParticipant | None = None
 
@@ -118,12 +119,19 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect()
 
-    dial_info = json.loads(ctx.job.metadata)
-    participant_identity = phone_number = dial_info["phone_number"]
+    # Parse metadata from dispatch
+    metadata = json.loads(ctx.job.metadata)
+    phone_number = metadata["phone_number"]
+    participant_identity = phone_number
+
+    # Extract system prompt from metadata, fall back to default if not provided
+    system_prompt = metadata.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+    client_name = metadata.get("client_name", "Unknown")
+
+    logger.info(f"Starting call for client: {client_name}, phone: {phone_number}")
 
     agent = OutboundCaller(
-        name="Jayden",
-        appointment_time="next Tuesday at 3pm",
+        instructions=system_prompt,
     )
 
     session = AgentSession(
@@ -132,7 +140,7 @@ async def entrypoint(ctx: JobContext):
             voice="Charon",
         ),
         preemptive_generation=True,  # Start generating before turn is fully confirmed
-        min_endpointing_delay=0.3,   # Reduced from 0.5s for faster response
+        min_endpointing_delay=0.1,   # Reduced from 0.5s for faster response
         max_endpointing_delay=1.0,   # Reduced from 3.0s
     )
 
@@ -184,6 +192,6 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="outbound-caller",
+            agent_name="outbound-caller-dev",
         )
     )
