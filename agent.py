@@ -29,6 +29,10 @@ load_dotenv(dotenv_path=".env")
 logger = logging.getLogger("outbound-caller")
 logger.setLevel(logging.INFO)
 
+# Enable debug logging for livekit components during troubleshooting
+livekit_logger = logging.getLogger("livekit")
+livekit_logger.setLevel(logging.DEBUG)
+
 outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
 DEFAULT_SYSTEM_PROMPT = """
@@ -73,6 +77,11 @@ Kadangi rinka užpildyta, einame prie esmės:
 2. **Jokio roboto tono:** Naudok užpildus: „žiūrėkit”, „supratau jus”, „viskas aišku”, „faktas”.
 3. **Numerių tikslumas:** Skaičius diktuok aiškiai, ypač atlyginimą ir telefono numerį.
 4. **Pripažink jų vertę:** Leisk jiems suprasti, kad jie renkasi darbą, o ne darbas renkasi juos.
+---
+### **5. HANDLING UNCLEAR INPUT**
+1. **Jei negirdėjai aiškiai:** Sakyk "Atsiprašau, ar galėtumėte pakartoti?" (Sorry, could you repeat?)
+2. **Jei tyla:** Sakyk "Sveiki, ar vis dar girdite?" (Hello, are you still there?)
+3. **Jei nesupratai:** Nesakyk "nesupratau" - verčiau paprašyk patikslinti konkrečią temą.
 ---
 ### **Example Interaction**
 **AI:** Sveiki, čia Tomas iš IdeaLink. Skambinu, nes ieškome gerų meistrų naujam objektui. Žinau, kad geri specialistai visada užsiėmę, bet gal turėtumėte minutę pasikalbėti? **Vartotojas:** Nu, galim, o kas ten per darbas? **AI:** Super. Mums dabar labiausiai reikia žmonių prie mūro darbų. Sakykite, kaip jūs pats – labiau prie mūro, ar turite kitą arkliuką? **Vartotojas:** Aš mūrijęs ne vieną namą, tai čia problemų nėra. **AI:** Viskas aišku, patirties vadinasi turite. O kaip su transportu, ar turite kuo atvykti į objektą, ar mums reikėtų pasirūpinti? **Vartotojas:** Turiu savo mašiną, čia ne problema. **AI:** Puiku. Žiūrėkit, kad negaištume laiko, iškart pasakysiu dėl pinigų – mes už tokį darbą mokam nuo pusantro iki dviejų tūkstančių į rankas. Ar jums tokios sąlygos tinka, ar žiūrit į didesnes sumas? **Vartotojas:** Nu, tiktų, reikia žiūrėt koks ten krūvis. **AI:** Teisingai sakot. Tai darom taip – aš jums SMS žinute atsiųsiu objekto vietą ir vadovo kontaktą. Nuvažiuosit, pasišnekučiuosit ir matysit viską gyvai. Kokiu numeriu siųsti? **Vartotojas:** 86*******. **AI:** Pasitikslinu: 8-6-1... Taip?. Viskas, nusiunčiau. Iki susitikimo!
@@ -144,6 +153,22 @@ async def entrypoint(ctx: JobContext):
         max_endpointing_delay=1.0,   # Reduced from 3.0s
     )
 
+    # Event handlers for debugging and logging
+    @session.on("user_input_transcribed")
+    def on_transcription(event):
+        transcript = getattr(event, 'transcript', str(event))
+        logger.info(f"[STT] User said: '{transcript}'")
+        if not transcript or (isinstance(transcript, str) and transcript.strip() == ""):
+            logger.warning("[STT] Empty transcription received - possible Lithuanian recognition failure")
+
+    @session.on("user_state_changed")
+    def on_user_state(event):
+        logger.info(f"[USER STATE] Changed to: {event}")
+
+    @session.on("agent_state_changed")
+    def on_agent_state(event):
+        logger.info(f"[AGENT STATE] Changed to: {event}")
+
     # start the session first before dialing, to ensure that when the user picks up
     # the agent does not miss anything the user says
     session_started = asyncio.create_task(
@@ -176,8 +201,13 @@ async def entrypoint(ctx: JobContext):
 
         agent.set_participant(participant)
 
+        # Small delay to ensure audio stream is stable
+        await asyncio.sleep(0.1)
+
         # Make the agent speak first when the user picks up
-        # session.generate_reply(instructions="Greet the user with your standard greeting from your prompt.")
+        session.generate_reply(
+            instructions="Greet the user with a simple 'Sveiki' and wait for the user to respond before giving your introduction."
+        )
 
     except api.TwirpError as e:
         logger.error(
